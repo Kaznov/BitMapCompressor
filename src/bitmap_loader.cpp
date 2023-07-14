@@ -20,6 +20,7 @@ using i32 = int32_t;
 //   i16 bfReserved2;
 //   u32 bfOffBits;
 // };
+static constexpr size_t FILE_HEADER_SIZE = 14;
 
 struct BitmapCoreInfoHeader {
     u32 size;
@@ -151,15 +152,17 @@ std::expected<BitmapData, const char*> loadBitmap(const char* filename) {
     // closes file on function exit
     FileGuard guard{f};
 
-    unsigned char header_bytes[18];
-    if (fread(header_bytes, 18, 1, f) != 1) {
+    unsigned char header_bytes[FILE_HEADER_SIZE + sizeof(u32)];
+    if (fread(header_bytes, sizeof(header_bytes), 1, f) != 1) {
         return std::unexpected{"The file is too short for a bitmap file"};
     }
     if (header_bytes[0] != 'B' || header_bytes[1] != 'M') {
         return std::unexpected{"The file is not a bitmap file"};
     }
 
+    // offset of pixel data
     const u32 data_offset = from_bytes<u32>(header_bytes + 10);
+    // size of the info header, identifying its type
     const u32 header_size = from_bytes<u32>(header_bytes + 14);
 
     std::expected<BitmapCoreInfo, const char*> read_info_header_result;
@@ -192,20 +195,15 @@ std::expected<BitmapData, const char*> loadBitmap(const char* filename) {
         return std::unexpected{"The number of bits per pixel is not supported"};
     }
 
-    BitmapData result;
-    result.bits_per_pixel = info.bits_per_pixel;
-    result.height = info.height;
-    result.width = info.width;
+    BitmapData result(info.width, info.height, info.bits_per_pixel);
 
     // If the representation is not the standard triplet, we need to read the color map
-    const size_t color_map_size = result.getColorMapSize();
-    result.color_map = std::vector<unsigned char>(color_map_size);
+    const size_t color_map_size = result.color_map.size();
     if (fread(result.color_map.data(), 1, color_map_size, f) != color_map_size) {
         return std::unexpected{"Cannot read the color map"};
     }
 
-    const size_t data_size = result.getDataSize();
-    result.data = std::vector<unsigned char>(data_size);
+    const size_t data_size = result.data.size();
     fseek(f, data_offset, SEEK_SET);
     if (fread(result.data.data(), 1, data_size, f) != data_size) {
         return std::unexpected{"Cannot read pixel data"};
@@ -215,8 +213,10 @@ std::expected<BitmapData, const char*> loadBitmap(const char* filename) {
 }
 
 std::expected<void, const char*> saveBitmap(const char* filename, const BitmapData& bitmap) {
-    static constexpr size_t file_header_size = 14;
-    size_t file_size_z = file_header_size + sizeof(BitmapCoreInfoHeader) + bitmap.getColorMapSize() + bitmap.getDataSize();
+    const size_t file_size_z = FILE_HEADER_SIZE
+                                + sizeof(BitmapCoreInfoHeader)
+                                + bitmap.color_map.size()
+                                + bitmap.data.size();
     if (file_size_z > UINT32_MAX) {
         return std::unexpected{"Bitmap is too big"};
     }
@@ -241,7 +241,9 @@ std::expected<void, const char*> saveBitmap(const char* filename, const BitmapDa
     fwrite(&file_size, sizeof(u32), 1, f);
     const u32 reserved_zero = 0;
     fwrite(&reserved_zero, sizeof(u32), 1, f);
-    const u32 data_offset = static_cast<u32>(file_header_size + sizeof(BitmapCoreInfoHeader) + bitmap.getColorMapSize());
+    const u32 data_offset = static_cast<u32>(FILE_HEADER_SIZE
+                                                + sizeof(BitmapCoreInfoHeader)
+                                                + bitmap.color_map.size());
     fwrite(&data_offset, sizeof(u32), 1, f);
 
     const BitmapCoreInfoHeader info_header {
@@ -253,8 +255,8 @@ std::expected<void, const char*> saveBitmap(const char* filename, const BitmapDa
     };
 
     fwrite(&info_header, sizeof(info_header), 1, f);
-    fwrite(bitmap.color_map.data(), bitmap.getColorMapSize(), 1, f);
-    fwrite(bitmap.data.data(), bitmap.getDataSize(), 1, f);
+    fwrite(bitmap.color_map.data(), bitmap.color_map.size(), 1, f);
+    fwrite(bitmap.data.data(), bitmap.data.size(), 1, f);
 
     if (ferror(f)) {
         return std::unexpected{"Writing to bitmap file failed"};
