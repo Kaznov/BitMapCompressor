@@ -21,16 +21,20 @@ std::expected<BitmapData, const char*> compressBitmap(const BitmapData& bmp) {
         auto operator<=>(const RGB& other) const = default;
     };
 
-    auto get_color = [&bmp](size_t idx) {
-        return RGB{ bmp.data[idx * 3 + 0], bmp.data[idx * 3 + 1], bmp.data[idx * 3 + 2] };
+    auto get_color = [&bmp](size_t row_idx, size_t col_idx) {
+        size_t scanline_width = bmp.getScanlineWidth();
+        size_t offset = row_idx * scanline_width + col_idx * 3;
+        return RGB{ bmp.data[offset + 2], bmp.data[offset + 1], bmp.data[offset + 0] };
     };
 
     std::set<RGB> colors;
-    for (size_t idx = 0; idx < bmp.width * bmp.height; ++idx) {
-        colors.insert(get_color(idx));
+    for (size_t row_idx = 0; row_idx < bmp.height; ++row_idx) {
+        for (size_t col_idx = 0; col_idx < bmp.width; ++col_idx) {
+            colors.insert(get_color(row_idx, col_idx));
+        }
     }
 
-    size_t bits_per_pixel =
+    const size_t bits_per_pixel =
         colors.size() <= (1 << 1) ? 1 :
         colors.size() <= (1 << 4) ? 4 :
         colors.size() <= (1 << 8) ? 8 :
@@ -46,25 +50,24 @@ std::expected<BitmapData, const char*> compressBitmap(const BitmapData& bmp) {
     result.width = bmp.width;
     result.height = bmp.height;
     result.bits_per_pixel = bits_per_pixel;
-    result.color_map = std::make_unique<uchar[]>(result.getColorMapSize());
-    result.data = std::make_unique<uchar[]>(result.getDataSize());
+    result.color_map = std::vector<uchar>(result.getColorMapSize());
+    result.data = std::vector<uchar>(result.getDataSize());
 
     std::map<RGB, uchar> colors_ids;
 
     for (size_t idx = 0; auto color : colors) {
-        result.color_map[idx * 3 + 0] = color.R;
+        result.color_map[idx * 3 + 0] = color.B;
         result.color_map[idx * 3 + 1] = color.G;
-        result.color_map[idx * 3 + 2] = color.B;
+        result.color_map[idx * 3 + 2] = color.R;
         colors_ids[color] = static_cast<uchar>(idx);
         ++idx;
     }
 
-    // even though pixels can ocupy a part of a byte, scanlines are byte-aligned
-    size_t scan_line_width = (result.width * bits_per_pixel + 8 - 1) / 8;
+    auto out_scanline_width = result.getScanlineWidth();
 
     for (size_t row_idx = 0; row_idx < result.height; ++row_idx) {
         // byte offset of the row
-        size_t row_offset = row_idx * scan_line_width;
+        const size_t row_offset = row_idx * out_scanline_width;
 
         for (size_t col_idx = 0; col_idx < result.width; ++col_idx) {
             // byte offset of the pixel
@@ -72,13 +75,13 @@ std::expected<BitmapData, const char*> compressBitmap(const BitmapData& bmp) {
             // bit offset of the pixel
             size_t in_byte_offset = (8 - (col_idx * bits_per_pixel) % 8 - bits_per_pixel);
 
-
-            size_t pixel_idx = row_idx * result.width + col_idx;
-            uchar color_id = colors_ids[get_color(pixel_idx)];
+            auto color = get_color(row_idx, col_idx);
+            uchar color_id = colors_ids.find(color)->second;
 
             // We need to "pack" pixels into bytes, we add a part of it
             uchar shifted_pixel_data = color_id << in_byte_offset;
-            result.data[row_offset + line_offset] |= shifted_pixel_data;
+            size_t offset = row_offset + line_offset;
+            result.data[offset] |= shifted_pixel_data;
         }
     }
 

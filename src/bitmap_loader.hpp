@@ -2,23 +2,26 @@
 #define BITMAP_LOADER_HPP
 
 #include <expected>
-#include <memory>
+#include <vector>
 
 struct BitmapData {
-    std::unique_ptr<unsigned char[]> data;
-    std::unique_ptr<unsigned char[]> color_map;
-    size_t bits_per_pixel;
+    std::vector<unsigned char> data;
+    std::vector<unsigned char> color_map;
     size_t width;
     size_t height;
+    size_t bits_per_pixel;
 
     size_t getColorMapSize() const {
         return bits_per_pixel == 24 ? 0 : (1 << bits_per_pixel) * 3;
     }
 
     size_t getDataSize() const {
-        // scanlines have to be aligned to byte boundaries,
-        // (w * bpp + 7) / 8 rounds up scanline to a full byte
-        return height * ((width * bits_per_pixel + 8 - 1) / 8);
+        return height * getScanlineWidth();
+    }
+
+    size_t getScanlineWidth() const {
+        // scanlines of bitpacked bitmaps have to be aligned to 4-byte boundaries
+        return (width * bits_per_pixel + 32 - 1) / 32 * 4;
     }
 };
 
